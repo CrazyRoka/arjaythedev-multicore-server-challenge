@@ -375,6 +375,9 @@ Loop :: struct {
 	conn: ^Connection,
 	req:  Request,
 	res:  Response,
+
+	send_head: []byte,
+	send_body: []byte,
 }
 
 @(private)

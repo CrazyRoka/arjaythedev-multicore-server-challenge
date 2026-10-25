@@ -56,7 +56,39 @@ send_raw :: proc(c: ^Connection, buf: []byte, close: bool) {
 @(private)
 on_async_sent :: proc(op: ^nbio.Operation, c: ^Connection, buf: []byte, close: bool) {
 	delete(buf, runtime.heap_allocator())
+	finish_async_send(op, c, close)
+}
 
+// Sends the response head and body as separate iovecs. Both buffers must be
+// allocated with the heap allocator; ownership is transferred and they are
+// freed when the send operation completes.
+send_raw_parts :: proc(c: ^Connection, head, body: []byte, close: bool) {
+	assert(!c.loop.res.sent, "response already sent")
+	c.loop.res.sent = true
+	c.loop.send_head = head
+	c.loop.send_body = body
+
+	nbio.send_poly2(
+		c.socket,
+		{head, body},
+		c,
+		close,
+		on_async_sent_parts,
+		l = c.event_loop,
+	)
+}
+
+@(private)
+on_async_sent_parts :: proc(op: ^nbio.Operation, c: ^Connection, close: bool) {
+	delete(c.loop.send_head, runtime.heap_allocator())
+	delete(c.loop.send_body, runtime.heap_allocator())
+	c.loop.send_head = nil
+	c.loop.send_body = nil
+	finish_async_send(op, c, close)
+}
+
+@(private)
+finish_async_send :: proc(op: ^nbio.Operation, c: ^Connection, close: bool) {
 	will_close := close
 	if op.send.err != nil {
 		log.errorf("async response send failed: %v", op.send.err)

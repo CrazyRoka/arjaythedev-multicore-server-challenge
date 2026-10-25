@@ -330,7 +330,7 @@ stmt_query :: proc(s: Stmt) -> string {
 }
 
 prepare_statements :: proc(conn: pq.Conn) -> bool {
-	if !db_exec_simple(conn, "SET plan_cache_mode = force_generic_plan") {
+	if !db_exec_simple(conn, "SET jit = off; SET plan_cache_mode = force_generic_plan") {
 		return false
 	}
 	for s in STMT_ALL {
@@ -461,7 +461,7 @@ read_article :: proc(res: pq.Result, row: i32, full: bool, allocator := context.
 	return x
 }
 
-read_comment :: proc(res: pq.Result, row: i32, allocator := context.temp_allocator) -> Comment_Row {
+read_comment :: proc(res: pq.Result, row: i32, allocator := context.temp_allocator, has_following := true) -> Comment_Row {
 	c: Comment_Row
 	c.id = read_i64(res, row, 0)
 	c.body = read_text(res, row, 1, allocator).? or_else ""
@@ -471,7 +471,9 @@ read_comment :: proc(res: pq.Result, row: i32, allocator := context.temp_allocat
 	c.author_username = read_text(res, row, 5, allocator).? or_else ""
 	c.author_bio = read_text(res, row, 6, allocator)
 	c.author_image = read_text(res, row, 7, allocator)
-	c.following = read_bool(res, row, 8)
+	if has_following {
+		c.following = read_bool(res, row, 8)
+	}
 	return c
 }
 
@@ -815,8 +817,7 @@ db_create_comment :: proc(conn: pq.Conn, article_id, author_id: i64, body: strin
 	if pq.n_tuples(res) != 1 {
 		return {}, false
 	}
-	c = read_comment(res, 0, allocator)
-	c.following = false
+	c = read_comment(res, 0, allocator, false)
 	return c, true
 }
 

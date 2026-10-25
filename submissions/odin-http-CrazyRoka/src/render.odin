@@ -97,25 +97,24 @@ append_int :: proc(buf: ^[dynamic]byte, n: int) {
 	append(buf, ..transmute([]byte)strconv.write_int(tmp[:], i64(n), 10))
 }
 
-send_json_bytes :: proc(conn: ^http.Connection, status: int, body: []byte, close: bool) {
-	buf := make([dynamic]byte, 0, 256 + len(body), runtime.heap_allocator())
+send_json :: proc(conn: ^http.Connection, status: int, j: ^Json, close: bool) {
+	head := make([dynamic]byte, 0, 128, runtime.heap_allocator())
 
-	append(&buf, "HTTP/1.1 ")
-	append_int(&buf, status)
-	append(&buf, ' ')
-	append(&buf, status_text(status))
-	append(&buf, "\r\n")
-	append(&buf, "Content-Type: application/json\r\n")
-	append(&buf, "Content-Length: ")
-	append_int(&buf, len(body))
-	append(&buf, "\r\n")
+	append(&head, "HTTP/1.1 ")
+	append_int(&head, status)
+	append(&head, ' ')
+	append(&head, status_text(status))
+	append(&head, "\r\n")
+	append(&head, "Content-Type: application/json\r\n")
+	append(&head, "Content-Length: ")
+	append_int(&head, len(j.b))
+	append(&head, "\r\n")
 	if close {
-		append(&buf, "Connection: close\r\n")
+		append(&head, "Connection: close\r\n")
 	}
-	append(&buf, "\r\n")
-	append(&buf, ..body)
+	append(&head, "\r\n")
 
-	http.send_raw(conn, buf[:], close)
+	http.send_raw_parts(conn, head[:], j.b[:], close)
 }
 
 send_no_content :: proc(conn: ^http.Connection, close: bool) {
@@ -128,11 +127,6 @@ send_no_content :: proc(conn: ^http.Connection, close: bool) {
 	append(&buf, "\r\n")
 
 	http.send_raw(conn, buf[:], close)
-}
-
-send_json :: proc(conn: ^http.Connection, status: int, j: ^Json, close: bool) {
-	send_json_bytes(conn, status, j.b[:], close)
-	json_destroy(j)
 }
 
 send_error :: proc(conn: ^http.Connection, status: int, message: string, close: bool) {
