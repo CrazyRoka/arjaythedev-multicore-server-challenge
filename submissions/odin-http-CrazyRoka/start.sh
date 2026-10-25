@@ -3,7 +3,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-export DB_WORKERS="${DB_WORKERS:-80}"
-export IO_THREADS="${IO_THREADS:-8}"
+export DB_WORKERS="${DB_WORKERS:-24}"
+export IO_THREADS="${IO_THREADS:-2}"
 
 exec ./bin/conduit

@@ -9,8 +9,8 @@ import "lib:http"
 import "lib:pq"
 
 MAX_BODY :: 1 << 20
-DEFAULT_DB_WORKERS :: 80
-DEFAULT_IO_THREADS :: 8
+DEFAULT_DB_WORKERS :: 24
+DEFAULT_IO_THREADS :: 2
 
 Endpoint :: enum {
 	Register,

@@ -81,6 +81,7 @@ Article_Row :: struct {
 	author_username: string,
 	author_bio:      Maybe(string),
 	author_image:    Maybe(string),
+	total_count:     i64,
 }
 
 Comment_Row :: struct {
@@ -116,60 +117,134 @@ User_Row :: struct {
 ARTICLE_LIST_SELECT :: `SELECT a.id, a.slug, a.title, a.description,
        to_char(a.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS created_at,
        to_char(a.updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS updated_at,
-       array_to_json(ARRAY(SELECT t.name FROM article_tags at JOIN tags t ON t.id = at.tag_id
-              WHERE at.article_id = a.id ORDER BY t.name))::text AS tag_list,
-       (SELECT count(*) FROM favorites f WHERE f.article_id = a.id) AS favorites_count,
-       EXISTS (SELECT 1 FROM favorites f WHERE f.article_id = a.id AND f.user_id = $1) AS favorited,
+       array_to_json(ARRAY(SELECT (SELECT t.name FROM tags t WHERE t.id = at.tag_id) AS name
+              FROM article_tags at
+              WHERE at.article_id = a.id ORDER BY name))::text AS tag_list,
+       fv.favorites_count,
+       fv.favorited,
        u.id, u.username, u.bio, u.image,
-       EXISTS (SELECT 1 FROM follows fo WHERE fo.follower_id = $1 AND fo.followee_id = a.author_id) AS following
-  FROM articles a
-  JOIN users u ON u.id = a.author_id`
+       EXISTS (SELECT 1 FROM follows fo WHERE fo.follower_id = $1 AND fo.followee_id = a.author_id) AS following`
 
 ARTICLE_FULL_SELECT :: `SELECT a.id, a.slug, a.title, a.description, a.body,
        to_char(a.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS created_at,
        to_char(a.updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS updated_at,
-       array_to_json(ARRAY(SELECT t.name FROM article_tags at JOIN tags t ON t.id = at.tag_id
-              WHERE at.article_id = a.id ORDER BY t.name))::text AS tag_list,
-       (SELECT count(*) FROM favorites f WHERE f.article_id = a.id) AS favorites_count,
-       EXISTS (SELECT 1 FROM favorites f WHERE f.article_id = a.id AND f.user_id = $1) AS favorited,
+       array_to_json(ARRAY(SELECT (SELECT t.name FROM tags t WHERE t.id = at.tag_id) AS name
+              FROM article_tags at
+              WHERE at.article_id = a.id ORDER BY name))::text AS tag_list,
+       fv.favorites_count,
+       fv.favorited,
        u.id, u.username, u.bio, u.image,
        EXISTS (SELECT 1 FROM follows fo WHERE fo.follower_id = $1 AND fo.followee_id = a.author_id) AS following
   FROM articles a
-  JOIN users u ON u.id = a.author_id`
+  JOIN users u ON u.id = a.author_id
+  LEFT JOIN LATERAL (
+    SELECT count(*) AS favorites_count,
+           COALESCE(bool_or(f.user_id = $1), false) AS favorited
+      FROM favorites f WHERE f.article_id = a.id
+  ) fv ON true`
 
-LIST_ALL :: ARTICLE_LIST_SELECT + ` ORDER BY a.id DESC LIMIT $2 OFFSET $3`
+LIST_ALL :: ARTICLE_LIST_SELECT + `,
+       (SELECT count(*) FROM (SELECT 1 FROM articles LIMIT 1000) s) AS total_count
+  FROM (
+    SELECT a.* FROM articles a
+    ORDER BY a.id DESC
+    OFFSET $3 LIMIT 100
+  ) a
+  JOIN users u ON u.id = a.author_id
+  LEFT JOIN LATERAL (
+    SELECT count(*) AS favorites_count,
+           COALESCE(bool_or(f.user_id = $1), false) AS favorited
+      FROM favorites f WHERE f.article_id = a.id
+  ) fv ON true
+  ORDER BY a.id DESC LIMIT $2`
 COUNT_ALL :: `SELECT count(*) FROM (SELECT 1 FROM articles a LIMIT 1000) s`
 
-LIST_BY_TAG :: ARTICLE_LIST_SELECT + ` WHERE a.id IN (SELECT at.article_id FROM article_tags at
-       WHERE at.tag_id = (SELECT t.id FROM tags t WHERE t.name = $4))
- ORDER BY a.id DESC LIMIT $2 OFFSET $3`
+LIST_BY_TAG :: ARTICLE_LIST_SELECT + `,
+       (SELECT count(*) FROM (SELECT 1 FROM article_tags at
+         WHERE at.tag_id = (SELECT t.id FROM tags t WHERE t.name = $4) LIMIT 1000) s) AS total_count
+  FROM (
+    SELECT a.* FROM articles a
+    WHERE a.id IN (SELECT at.article_id FROM article_tags at
+      WHERE at.tag_id = (SELECT t.id FROM tags t WHERE t.name = $4))
+    ORDER BY a.id DESC
+    OFFSET $3 LIMIT 100
+  ) a
+  JOIN users u ON u.id = a.author_id
+  LEFT JOIN LATERAL (
+    SELECT count(*) AS favorites_count,
+           COALESCE(bool_or(f.user_id = $1), false) AS favorited
+      FROM favorites f WHERE f.article_id = a.id
+  ) fv ON true
+  ORDER BY a.id DESC LIMIT $2`
 COUNT_BY_TAG :: `SELECT count(*) FROM (SELECT 1 FROM article_tags at
        WHERE at.tag_id = (SELECT t.id FROM tags t WHERE t.name = $1) LIMIT 1000) s`
 
-LIST_BY_AUTHOR :: ARTICLE_LIST_SELECT + ` WHERE a.author_id = (SELECT au.id FROM users au WHERE au.username = $4)
- ORDER BY a.id DESC LIMIT $2 OFFSET $3`
+LIST_BY_AUTHOR :: ARTICLE_LIST_SELECT + `,
+       (SELECT count(*) FROM (SELECT 1 FROM articles a
+         WHERE a.author_id = (SELECT au.id FROM users au WHERE au.username = $4) LIMIT 1000) s) AS total_count
+  FROM (
+    SELECT a.* FROM articles a
+    WHERE a.author_id = (SELECT au.id FROM users au WHERE au.username = $4)
+    ORDER BY a.id DESC
+    OFFSET $3 LIMIT 100
+  ) a
+  JOIN users u ON u.id = a.author_id
+  LEFT JOIN LATERAL (
+    SELECT count(*) AS favorites_count,
+           COALESCE(bool_or(f.user_id = $1), false) AS favorited
+      FROM favorites f WHERE f.article_id = a.id
+  ) fv ON true
+  ORDER BY a.id DESC LIMIT $2`
 COUNT_BY_AUTHOR :: `SELECT count(*) FROM (SELECT 1 FROM articles a
        WHERE a.author_id = (SELECT u.id FROM users u WHERE u.username = $1) LIMIT 1000) s`
 
-LIST_BY_FAVORITE :: ARTICLE_LIST_SELECT + ` WHERE a.id IN (SELECT f.article_id FROM favorites f
-       WHERE f.user_id = (SELECT fu.id FROM users fu WHERE fu.username = $4))
- ORDER BY a.id DESC LIMIT $2 OFFSET $3`
+LIST_BY_FAVORITE :: ARTICLE_LIST_SELECT + `,
+       (SELECT count(*) FROM (SELECT 1 FROM favorites f
+         WHERE f.user_id = (SELECT fu.id FROM users fu WHERE fu.username = $4) LIMIT 1000) s) AS total_count
+  FROM (
+    SELECT a.* FROM articles a
+    WHERE a.id IN (SELECT f.article_id FROM favorites f
+      WHERE f.user_id = (SELECT fu.id FROM users fu WHERE fu.username = $4))
+    ORDER BY a.id DESC
+    OFFSET $3 LIMIT 100
+  ) a
+  JOIN users u ON u.id = a.author_id
+  LEFT JOIN LATERAL (
+    SELECT count(*) AS favorites_count,
+           COALESCE(bool_or(f.user_id = $1), false) AS favorited
+      FROM favorites f WHERE f.article_id = a.id
+  ) fv ON true
+  ORDER BY a.id DESC LIMIT $2`
 COUNT_BY_FAVORITE :: `SELECT count(*) FROM (SELECT 1 FROM favorites f
        WHERE f.user_id = (SELECT fu.id FROM users fu WHERE fu.username = $1) LIMIT 1000) s`
 
-LIST_FEED :: ARTICLE_LIST_SELECT + ` WHERE a.id IN (
-    SELECT a2.id
-      FROM follows fo
-      CROSS JOIN LATERAL (
-        SELECT a2.id FROM articles a2
-        WHERE a2.author_id = fo.followee_id
-        ORDER BY a2.id DESC
-        LIMIT LEAST($2::bigint + $3::bigint, 1000)
-      ) a2
-     WHERE fo.follower_id = $1
-     ORDER BY a2.id DESC
-     LIMIT $2::bigint OFFSET $3::bigint)
- ORDER BY a.id DESC`
+LIST_FEED :: ARTICLE_LIST_SELECT + `,
+       (SELECT count(*) FROM (SELECT 1 FROM articles a
+         WHERE a.author_id IN (SELECT fo.followee_id FROM follows fo WHERE fo.follower_id = $1) LIMIT 1000) s) AS total_count
+  FROM (
+    SELECT a.* FROM articles a
+    WHERE a.id IN (
+      SELECT a2.id
+        FROM follows fo
+        CROSS JOIN LATERAL (
+          SELECT a2.id FROM articles a2
+          WHERE a2.author_id = fo.followee_id
+          ORDER BY a2.id DESC
+          LIMIT LEAST($2::bigint + $3::bigint, 1000)
+        ) a2
+       WHERE fo.follower_id = $1
+       ORDER BY a2.id DESC
+       LIMIT 100 OFFSET $3::bigint)
+    ORDER BY a.id DESC
+    LIMIT $2
+  ) a
+  JOIN users u ON u.id = a.author_id
+  LEFT JOIN LATERAL (
+    SELECT count(*) AS favorites_count,
+           COALESCE(bool_or(f.user_id = $1), false) AS favorited
+      FROM favorites f WHERE f.article_id = a.id
+  ) fv ON true
+  ORDER BY a.id DESC`
 COUNT_FEED :: `SELECT count(*) FROM (SELECT 1 FROM articles a
        WHERE a.author_id IN (SELECT fo.followee_id FROM follows fo WHERE fo.follower_id = $1) LIMIT 1000) s`
 
@@ -330,7 +405,7 @@ stmt_query :: proc(s: Stmt) -> string {
 }
 
 prepare_statements :: proc(conn: pq.Conn) -> bool {
-	if !db_exec_simple(conn, "SET jit = off; SET plan_cache_mode = force_generic_plan") {
+	if !db_exec_simple(conn, "SET jit = off; SET plan_cache_mode = force_generic_plan; SET max_parallel_workers_per_gather = 0") {
 		return false
 	}
 	for s in STMT_ALL {
@@ -457,6 +532,7 @@ read_article :: proc(res: pq.Result, row: i32, full: bool, allocator := context.
 		x.author_bio = read_text(res, row, 11, allocator)
 		x.author_image = read_text(res, row, 12, allocator)
 		x.following = read_bool(res, row, 13)
+		x.total_count = read_i64(res, row, 14)
 	}
 	return x
 }

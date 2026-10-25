@@ -463,10 +463,16 @@ handle_list_articles :: proc(w: ^Worker, job: ^Job, auth: Auth, close: bool) {
 		send_error(job.conn, 500, "internal error", close)
 		return
 	}
-	count, count_ok := db_count_articles(w.conn, auth.viewer, mode, filter)
-	if !count_ok {
-		send_error(job.conn, 500, "internal error", close)
-		return
+	count := i64(0)
+	if len(rows) > 0 {
+		count = rows[0].total_count
+	} else {
+		count_ok: bool
+		count, count_ok = db_count_articles(w.conn, auth.viewer, mode, filter)
+		if !count_ok {
+			send_error(job.conn, 500, "internal error", close)
+			return
+		}
 	}
 	send_articles_response(job.conn, rows, count, close)
 }
@@ -482,10 +488,16 @@ handle_feed :: proc(w: ^Worker, job: ^Job, auth: Auth, close: bool) {
 		send_error(job.conn, 500, "internal error", close)
 		return
 	}
-	count, count_ok := db_count_articles(w.conn, auth.viewer, .Feed, "")
-	if !count_ok {
-		send_error(job.conn, 500, "internal error", close)
-		return
+	count := i64(0)
+	if len(rows) > 0 {
+		count = rows[0].total_count
+	} else {
+		count_ok: bool
+		count, count_ok = db_count_articles(w.conn, auth.viewer, .Feed, "")
+		if !count_ok {
+			send_error(job.conn, 500, "internal error", close)
+			return
+		}
 	}
 	send_articles_response(job.conn, rows, count, close)
 }
