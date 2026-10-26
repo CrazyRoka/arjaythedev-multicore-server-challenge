@@ -227,8 +227,7 @@ LIST_FEED :: ARTICLE_LIST_SELECT + `,
        (SELECT count(*) FROM (SELECT 1 FROM articles a
          WHERE a.author_id IN (SELECT fo.followee_id FROM follows fo WHERE fo.follower_id = $1) LIMIT 1000) s) AS total_count
   FROM (
-    SELECT a.* FROM articles a
-    WHERE a.id IN (
+    SELECT a.* FROM (
       SELECT a2.id
         FROM follows fo
         CROSS JOIN LATERAL (
@@ -239,7 +238,9 @@ LIST_FEED :: ARTICLE_LIST_SELECT + `,
         ) a2
        WHERE fo.follower_id = $1
        ORDER BY a2.id DESC
-       LIMIT 100 OFFSET $3::bigint)
+       LIMIT LEAST($2::bigint + $3::bigint, 100)
+       OFFSET $3::bigint
+    ) ids JOIN articles a ON a.id = ids.id
     ORDER BY a.id DESC
     LIMIT $2
   ) a
