@@ -21,6 +21,10 @@ for libpq access.
 - 24 blocking libpq worker threads each own one PostgreSQL connection and process
   queued requests. Responses are sent asynchronously back onto the originating
   connection's event loop with `nbio.send_poly2`/`send_poly3`.
+- Each worker drains a small batch of jobs and pipelines the single-statement
+  reads through libpq pipeline mode (`PQsendQueryPrepared` + one sync per batch,
+  results demultiplexed in order), so a batch costs one client/server round trip
+  instead of one per query. Writes and multi-step handlers still run normally.
 - Request bodies are fully drained before dispatch, so keep-alive connections stay open.
 - JSON is written directly into byte buffers; PostgreSQL returns raw UTC timestamps and
   the app formats the fixed-width ISO string, while `tagList` JSON is still produced by

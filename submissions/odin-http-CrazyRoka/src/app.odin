@@ -11,6 +11,7 @@ import "lib:pq"
 MAX_BODY :: 1 << 20
 DEFAULT_DB_WORKERS :: 24
 DEFAULT_IO_THREADS :: 2
+BATCH_MAX :: 8
 
 Endpoint :: enum {
 	Register,
@@ -112,6 +113,35 @@ queue_pop :: proc(q: ^Job_Queue) -> ^Job {
 
 	sync.unlock(&q.mu)
 	return job
+}
+
+queue_pop_batch :: proc(q: ^Job_Queue, out: []^Job) -> int {
+	sync.lock(&q.mu)
+	for q.head >= len(q.jobs) && !q.closed {
+		sync.cond_wait(&q.cond, &q.mu)
+	}
+
+	if q.head >= len(q.jobs) {
+		sync.unlock(&q.mu)
+		return 0
+	}
+
+	n := 0
+	for n < len(out) && q.head < len(q.jobs) {
+		out[n] = q.jobs[q.head]
+		q.head += 1
+		n += 1
+	}
+
+	if q.head > 1024 && q.head * 2 >= len(q.jobs) {
+		remaining := len(q.jobs) - q.head
+		copy(q.jobs[:remaining], q.jobs[q.head:])
+		resize(&q.jobs, remaining)
+		q.head = 0
+	}
+
+	sync.unlock(&q.mu)
+	return n
 }
 
 enqueue_job :: proc(ctx: ^Body_Ctx, body: http.Body, err: http.Body_Error) {
