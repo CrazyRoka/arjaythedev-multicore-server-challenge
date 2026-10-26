@@ -9,9 +9,6 @@ parse_wrapper :: proc(body: string, key: string) -> (m: json.Object, ok: bool) {
 	if len(body) == 0 {
 		return nil, false
 	}
-	if !json.is_valid(transmute([]byte)body, .JSON, true) {
-		return nil, false
-	}
 	value, err := json.parse_string(body, .JSON, true, context.temp_allocator)
 	if err != .None {
 		return nil, false
@@ -296,7 +293,7 @@ handle_register :: proc(w: ^Worker, job: ^Job, close: bool) {
 		send_error(job.conn, 422, "username, email and password are required", close)
 		return
 	}
-	hash, hash_ok := hash_password(password)
+	hash, hash_ok := hash_password(password, w.crypt_data)
 	if !hash_ok {
 		send_error(job.conn, 422, "password is too long", close)
 		return
@@ -336,7 +333,7 @@ handle_login :: proc(w: ^Worker, job: ^Job, close: bool) {
 		return
 	}
 	hash := u.password_hash.? or_else ""
-	if !verify_password(password, hash) {
+	if !verify_password(password, hash, w.crypt_data) {
 		send_error(job.conn, 401, "invalid email or password", close)
 		return
 	}
@@ -375,7 +372,7 @@ handle_update_user :: proc(w: ^Worker, job: ^Job, auth: Auth, close: bool) {
 
 	hash: Maybe(string)
 	if pw, has_pw := password.?; has_pw {
-		h, hash_ok := hash_password(pw)
+		h, hash_ok := hash_password(pw, w.crypt_data)
 		if !hash_ok {
 			send_error(job.conn, 422, "password is too long", close)
 			return
@@ -421,7 +418,7 @@ handle_follow :: proc(w: ^Worker, job: ^Job, auth: Auth, follow: bool, close: bo
 		send_error(job.conn, 404, "profile not found", close)
 		return
 	}
-	p, found, ok := db_get_profile(w.conn, job.params[0], auth.viewer)
+	p, found, ok := db_set_follow(w.conn, job.params[0], auth.viewer, follow)
 	if !ok {
 		send_error(job.conn, 500, "internal error", close)
 		return
@@ -430,11 +427,6 @@ handle_follow :: proc(w: ^Worker, job: ^Job, auth: Auth, follow: bool, close: bo
 		send_error(job.conn, 404, "profile not found", close)
 		return
 	}
-	if !db_set_follow(w.conn, auth.viewer, p.id, follow) {
-		send_error(job.conn, 500, "internal error", close)
-		return
-	}
-	p.following = follow
 	send_profile_response(job.conn, p, close)
 }
 
@@ -629,22 +621,13 @@ handle_favorite :: proc(w: ^Worker, job: ^Job, auth: Auth, favorite: bool, close
 		send_error(job.conn, 404, "article not found", close)
 		return
 	}
-	id, found, id_ok := db_article_id(w.conn, job.params[0])
-	if !id_ok {
+	a, found, ok := db_set_favorite(w.conn, job.params[0], auth.viewer, favorite)
+	if !ok {
 		send_error(job.conn, 500, "internal error", close)
 		return
 	}
 	if !found {
 		send_error(job.conn, 404, "article not found", close)
-		return
-	}
-	if !db_set_favorite(w.conn, auth.viewer, id, favorite) {
-		send_error(job.conn, 500, "internal error", close)
-		return
-	}
-	a, article_found, get_ok := db_get_article_by_id(w.conn, id, auth.viewer)
-	if !get_ok || !article_found {
-		send_error(job.conn, 500, "internal error", close)
 		return
 	}
 	send_article_response(job.conn, 200, a, close)
@@ -655,18 +638,13 @@ handle_list_comments :: proc(w: ^Worker, job: ^Job, auth: Auth, close: bool) {
 		send_error(job.conn, 404, "article not found", close)
 		return
 	}
-	id, found, id_ok := db_article_id(w.conn, job.params[0])
-	if !id_ok {
+	rows, found, list_ok := db_list_comments(w.conn, auth.viewer, job.params[0])
+	if !list_ok {
 		send_error(job.conn, 500, "internal error", close)
 		return
 	}
 	if !found {
 		send_error(job.conn, 404, "article not found", close)
-		return
-	}
-	rows, list_ok := db_list_comments(w.conn, id, auth.viewer)
-	if !list_ok {
-		send_error(job.conn, 500, "internal error", close)
 		return
 	}
 	send_comments_response(job.conn, rows, close)
@@ -687,18 +665,13 @@ handle_create_comment :: proc(w: ^Worker, job: ^Job, auth: Auth, close: bool) {
 		send_error(job.conn, 404, "article not found", close)
 		return
 	}
-	id, found, article_ok := db_article_id(w.conn, job.params[0])
-	if !article_ok {
+	c, found, comment_ok := db_create_comment(w.conn, job.params[0], auth.viewer, body)
+	if !comment_ok {
 		send_error(job.conn, 500, "internal error", close)
 		return
 	}
 	if !found {
 		send_error(job.conn, 404, "article not found", close)
-		return
-	}
-	c, comment_ok := db_create_comment(w.conn, id, auth.viewer, body)
-	if !comment_ok {
-		send_error(job.conn, 500, "internal error", close)
 		return
 	}
 	send_comment_response(job.conn, 201, c, close)
@@ -714,7 +687,7 @@ handle_delete_comment :: proc(w: ^Worker, job: ^Job, auth: Auth, close: bool) {
 		send_error(job.conn, 404, "comment not found", close)
 		return
 	}
-	author_id, found, ok := db_comment_author(w.conn, comment_id, job.params[0])
+	author_id, found, ok := db_delete_comment(w.conn, comment_id, job.params[0], auth.viewer)
 	if !ok {
 		send_error(job.conn, 500, "internal error", close)
 		return
@@ -725,10 +698,6 @@ handle_delete_comment :: proc(w: ^Worker, job: ^Job, auth: Auth, close: bool) {
 	}
 	if author_id != auth.viewer {
 		send_error(job.conn, 403, "not the author", close)
-		return
-	}
-	if !db_delete_comment(w.conn, comment_id) {
-		send_error(job.conn, 500, "internal error", close)
 		return
 	}
 	send_no_content(job.conn, close)

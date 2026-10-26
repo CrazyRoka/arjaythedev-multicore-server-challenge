@@ -17,7 +17,7 @@ BCRYPT_COST :: u64(10)
 CRYPT_DATA_SIZE :: 32768
 CRYPT_SALT_SIZE :: 192
 
-hash_password :: proc(password: string, allocator := context.temp_allocator) -> (hash: string, ok: bool) {
+hash_password :: proc(password: string, scratch: []byte, allocator := context.temp_allocator) -> (hash: string, ok: bool) {
 	if len(password) > 72 {
 		return "", false
 	}
@@ -39,7 +39,10 @@ hash_password :: proc(password: string, allocator := context.temp_allocator) -> 
 		return "", false
 	}
 
-	data := make([]byte, CRYPT_DATA_SIZE, allocator)
+	data := scratch
+	if len(data) < CRYPT_DATA_SIZE {
+		data = make([]byte, CRYPT_DATA_SIZE, allocator)
+	}
 	out := crypt_rn(phrase, salt, raw_data(data), i32(len(data)))
 	if out == nil {
 		return "", false
@@ -52,14 +55,17 @@ hash_password :: proc(password: string, allocator := context.temp_allocator) -> 
 	return strings.clone(hash, allocator), true
 }
 
-verify_password :: proc(password, hash: string, allocator := context.temp_allocator) -> bool {
+verify_password :: proc(password, hash: string, scratch: []byte, allocator := context.temp_allocator) -> bool {
 	if len(password) > 72 {
 		return false
 	}
 
 	phrase := strings.clone_to_cstring(password, allocator)
 	setting := strings.clone_to_cstring(hash, allocator)
-	data := make([]byte, CRYPT_DATA_SIZE, allocator)
+	data := scratch
+	if len(data) < CRYPT_DATA_SIZE {
+		data = make([]byte, CRYPT_DATA_SIZE, allocator)
+	}
 	out := crypt_rn(phrase, setting, raw_data(data), i32(len(data)))
 	if out == nil {
 		return false

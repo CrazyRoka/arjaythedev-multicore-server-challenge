@@ -55,6 +55,7 @@ main :: proc() {
 		w.app = app
 		w.index = i
 		w.conn = pq.connectdb(app.db_conninfo)
+		w.crypt_data = make([]byte, CRYPT_DATA_SIZE, context.allocator)
 		if pq.status(w.conn) != .Ok {
 			log.errorf("database connection %d failed", i)
 			os.exit(1)

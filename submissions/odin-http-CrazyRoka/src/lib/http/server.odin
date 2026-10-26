@@ -439,6 +439,7 @@ on_accept :: proc(op: ^nbio.Operation, server: ^Server) {
 	c.state = .New
 	c.server = server
 	c.socket = op.accept.client
+	_ = net.set_option(c.socket, .TCP_Nodelay, true)
 	c.event_loop = td.event_loop
 	c.loop.req.client = op.accept.client_endpoint
 

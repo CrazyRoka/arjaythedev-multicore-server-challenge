@@ -22,18 +22,27 @@ for libpq access.
   queued requests. Responses are sent asynchronously back onto the originating
   connection's event loop with `nbio.send_poly2`/`send_poly3`.
 - Request bodies are fully drained before dispatch, so keep-alive connections stay open.
-- JSON is written directly into byte buffers; timestamps and `tagList` JSON are produced
-  by PostgreSQL to avoid parsing/formatting work in the hot path.
+- JSON is written directly into byte buffers; PostgreSQL returns raw UTC timestamps and
+  the app formats the fixed-width ISO string, while `tagList` JSON is still produced by
+  PostgreSQL.
 - List queries select the page of articles first, bound the inner page to 100 rows,
   and only then compute tags, favorite counts and viewer flags for the returned rows.
   Tag names are fetched by primary key; favorite count and viewer flag share one
   `LEFT JOIN LATERAL` scan. The capped `articlesCount` is returned by the same
   statement, avoiding a second round trip for non-empty pages.
 - Article creation is a single transaction (article, tags, article_tags).
+- Favorite/unfavorite returns the full article (`favoritesCount` adjusted by the CTE's
+  insert/delete deltas, since the statement snapshot cannot see its own writes) and
+  follow/unfollow returns the profile, each in a single statement.
+- Comment list, create and delete resolve the article by slug inside the same statement:
+  the list uses a `LEFT JOIN LATERAL` so an article with no comments still returns a row,
+  and delete authorizes and deletes in one CTE, all one round trip.
+- Accepted sockets set `TCP_NODELAY`; bcrypt reuses a per-worker scratch buffer; request
+  JSON is parsed once.
 - Per-connection virtual arenas start at 8 KiB instead of the upstream 1 MiB, and the
   listen backlog is 65535.
 - Per-connection PostgreSQL settings: `plan_cache_mode=force_generic_plan`, `jit=off`,
-  `max_parallel_workers_per_gather=0`.
+  `max_parallel_workers_per_gather=0`, `DateStyle=ISO, MDY`, `TimeZone=UTC`.
 - The server is configured with `HOST`, `PORT`, `DATABASE_URL`, and `JWT_SECRET`;
   `DB_WORKERS` and `IO_THREADS` may be overridden. On the 8-vCPU target, 24 workers
   and 2 io_uring loops measured best.
