@@ -11,6 +11,25 @@ import "lib:pq"
 
 MAX_READ_PARAMS :: 4
 
+Param_Kind :: enum {
+	Text,
+	Int,
+}
+
+Read_Param :: struct {
+	kind: Param_Kind,
+	int:  i64,
+	text: string,
+}
+
+param_int :: proc(v: i64) -> Read_Param {
+	return {kind = .Int, int = v}
+}
+
+param_text :: proc(s: string) -> Read_Param {
+	return {kind = .Text, text = s}
+}
+
 Read_Kind :: enum {
 	Article,
 	Profile,
@@ -27,7 +46,7 @@ Read_Slot :: struct {
 	close:    bool,
 	stmt:     Stmt,
 	n_params: int,
-	params:   [MAX_READ_PARAMS]Maybe(string),
+	params:   [MAX_READ_PARAMS]Read_Param,
 	mode:     List_Mode,
 	filter:   string,
 	limit:    i64,
@@ -92,8 +111,6 @@ preflight_read :: proc(w: ^Worker, job: ^Job) -> (slot: Read_Slot, action: Prefl
 		return slot, .Done
 	}
 
-	viewer_str := fmt.tprintf("%d", auth.viewer)
-
 	#partial switch job.ep {
 	case .GetArticle:
 		if len(job.params) < 1 {
@@ -103,8 +120,8 @@ preflight_read :: proc(w: ^Worker, job: ^Job) -> (slot: Read_Slot, action: Prefl
 		slot.kind = .Article
 		slot.stmt = .ArticleBySlug
 		slot.n_params = 2
-		slot.params[0] = viewer_str
-		slot.params[1] = job.params[0]
+		slot.params[0] = param_int(auth.viewer)
+		slot.params[1] = param_text(job.params[0])
 	case .GetProfile:
 		if len(job.params) < 1 {
 			send_error(job.conn, 404, "profile not found", slot.close)
@@ -113,8 +130,8 @@ preflight_read :: proc(w: ^Worker, job: ^Job) -> (slot: Read_Slot, action: Prefl
 		slot.kind = .Profile
 		slot.stmt = .ProfileByUsername
 		slot.n_params = 2
-		slot.params[0] = viewer_str
-		slot.params[1] = job.params[0]
+		slot.params[0] = param_int(auth.viewer)
+		slot.params[1] = param_text(job.params[0])
 	case .ListComments:
 		if len(job.params) < 1 {
 			send_error(job.conn, 404, "article not found", slot.close)
@@ -123,8 +140,8 @@ preflight_read :: proc(w: ^Worker, job: ^Job) -> (slot: Read_Slot, action: Prefl
 		slot.kind = .Comments
 		slot.stmt = .ListComments
 		slot.n_params = 2
-		slot.params[0] = viewer_str
-		slot.params[1] = job.params[0]
+		slot.params[0] = param_int(auth.viewer)
+		slot.params[1] = param_text(job.params[0])
 	case .ListArticles:
 		limit, offset, ok := limit_offset(job.req)
 		if !ok {
@@ -148,24 +165,24 @@ preflight_read :: proc(w: ^Worker, job: ^Job) -> (slot: Read_Slot, action: Prefl
 		slot.filter = filter
 		slot.limit = limit
 		slot.offset = offset
-		slot.params[0] = viewer_str
-		slot.params[1] = fmt.tprintf("%d", limit)
-		slot.params[2] = fmt.tprintf("%d", offset)
+		slot.params[0] = param_int(auth.viewer)
+		slot.params[1] = param_int(limit)
+		slot.params[2] = param_int(offset)
 		switch mode {
 		case .All:
 			slot.stmt = .ListAll
 			slot.n_params = 3
 		case .Tag:
 			slot.stmt = .ListByTag
-			slot.params[3] = filter
+			slot.params[3] = param_text(filter)
 			slot.n_params = 4
 		case .Author:
 			slot.stmt = .ListByAuthor
-			slot.params[3] = filter
+			slot.params[3] = param_text(filter)
 			slot.n_params = 4
 		case .Favorited:
 			slot.stmt = .ListByFavorited
-			slot.params[3] = filter
+			slot.params[3] = param_text(filter)
 			slot.n_params = 4
 		case .Feed:
 			return slot, .Sync
@@ -182,14 +199,14 @@ preflight_read :: proc(w: ^Worker, job: ^Job) -> (slot: Read_Slot, action: Prefl
 		slot.offset = offset
 		slot.stmt = .ListFeed
 		slot.n_params = 3
-		slot.params[0] = viewer_str
-		slot.params[1] = fmt.tprintf("%d", limit)
-		slot.params[2] = fmt.tprintf("%d", offset)
+		slot.params[0] = param_int(auth.viewer)
+		slot.params[1] = param_int(limit)
+		slot.params[2] = param_int(offset)
 	case .CurrentUser:
 		slot.kind = .CurrentUser
 		slot.stmt = .UserById
 		slot.n_params = 1
-		slot.params[0] = viewer_str
+		slot.params[0] = param_int(auth.viewer)
 	case:
 		return slot, .Sync
 	}
@@ -199,20 +216,38 @@ preflight_read :: proc(w: ^Worker, job: ^Job) -> (slot: Read_Slot, action: Prefl
 send_read :: proc(w: ^Worker, slot: ^Read_Slot) -> bool {
 	params := slot.params[:slot.n_params]
 	values := make([][^]byte, len(params), context.temp_allocator)
+	lengths := make([]i32, len(params), context.temp_allocator)
+	formats := make([]pq.Format, len(params), context.temp_allocator)
+	int_bufs: [MAX_READ_PARAMS][8]byte
+
 	for p, i in params {
-		if v, ok := p.?; ok {
-			values[i] = ([^]byte)(strings.clone_to_cstring(v, context.temp_allocator))
-		} else {
-			values[i] = nil
+		switch p.kind {
+		case .Int:
+			v := u64(p.int)
+			for k in 0..<8 {
+				int_bufs[i][7 - k] = byte(v & 0xFF)
+				v >>= 8
+			}
+			values[i] = ([^]byte)(&int_bufs[i][0])
+			lengths[i] = 8
+			formats[i] = .Binary
+		case .Text:
+			values[i] = ([^]byte)(strings.clone_to_cstring(p.text, context.temp_allocator))
+			lengths[i] = i32(len(p.text))
+			formats[i] = .Text
 		}
 	}
 
 	values_ptr: [^][^]byte
+	lengths_ptr: [^]i32
+	formats_ptr: [^]pq.Format
 	if len(values) > 0 {
 		values_ptr = &values[0]
+		lengths_ptr = &lengths[0]
+		formats_ptr = &formats[0]
 	}
 
-	return pq.send_query_prepared(w.conn, stmt_name(slot.stmt), i32(len(values)), values_ptr, nil, nil, .Text) != false
+	return pq.send_query_prepared(w.conn, stmt_name(slot.stmt), i32(len(values)), values_ptr, lengths_ptr, formats_ptr, .Text) != false
 }
 
 render_read :: proc(w: ^Worker, slot: Read_Slot, res: pq.Result) {
