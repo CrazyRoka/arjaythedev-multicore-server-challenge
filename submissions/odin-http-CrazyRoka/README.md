@@ -18,7 +18,7 @@ for libpq access.
 ## Design
 
 - 2 non-blocking io_uring event-loop threads accept connections and parse HTTP.
-- 24 blocking libpq worker threads each own one PostgreSQL connection and process
+- 8 blocking libpq worker threads each own one PostgreSQL connection and process
   queued requests. Responses are sent asynchronously back onto the originating
   connection's event loop with `nbio.send_poly2`/`send_poly3`.
 - Each worker drains a small batch of jobs and pipelines the single-statement
@@ -48,5 +48,6 @@ for libpq access.
 - Per-connection PostgreSQL settings: `plan_cache_mode=force_generic_plan`, `jit=off`,
   `max_parallel_workers_per_gather=0`, `DateStyle=ISO, MDY`, `TimeZone=UTC`.
 - The server is configured with `HOST`, `PORT`, `DATABASE_URL`, and `JWT_SECRET`;
-  `DB_WORKERS` and `IO_THREADS` may be overridden. On the 8-vCPU target, 24 workers
-  and 2 io_uring loops measured best.
+  `DB_WORKERS` and `IO_THREADS` may be overridden. On the 8-vCPU target, 8 workers
+  and 2 io_uring loops measured best: more workers only add PostgreSQL backend
+  contention for the same cores.
